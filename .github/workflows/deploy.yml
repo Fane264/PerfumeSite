@@ -1,0 +1,41 @@
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Skip gracefully when the Vercel token isn't configured (e.g. forks).
+    if: ${{ github.repository_owner != '' }}
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard — require VERCEL_TOKEN
+        id: guard
+        run: |
+          if [ -z "${VERCEL_TOKEN}" ]; then
+            echo "VERCEL_TOKEN not set — skipping deploy."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.skip == 'false'
+        with: { node-version: "20", cache: "npm" }
+      - name: Install Vercel CLI
+        if: steps.guard.outputs.skip == 'false'
+        run: npm install -g vercel
+      - name: Pull Vercel environment
+        if: steps.guard.outputs.skip == 'false'
+        run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+      - name: Build
+        if: steps.guard.outputs.skip == 'false'
+        run: vercel build --prod --token=$VERCEL_TOKEN
+      - name: Deploy
+        if: steps.guard.outputs.skip == 'false'
+        run: vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN

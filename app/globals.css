@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Luxury dark theme. The shadcn HSL tokens below are tuned to the brand palette
+ * so existing token-based components (button, badge, …) render dark by default:
+ *   background #0A0A0A · surface #111 · surface2 #1A1A1A · border #2A2A2A
+ *   cream #F5F0E8 (foreground) · muted #9A9088 · gold #C9A84C (accent/ring)
+ */
+@layer base {
+  :root {
+    --background: 0 0% 4%;
+    --foreground: 38 38% 93%;
+
+    --card: 0 0% 7%;
+    --card-foreground: 38 38% 93%;
+
+    --popover: 0 0% 7%;
+    --popover-foreground: 38 38% 93%;
+
+    --primary: 38 38% 93%;
+    --primary-foreground: 0 0% 4%;
+
+    --secondary: 0 0% 10%;
+    --secondary-foreground: 38 38% 93%;
+
+    --muted: 0 0% 10%;
+    /* Bumped from 57% → 62% lightness to comfortably clear WCAG AA (4.5:1)
+       contrast against the near-black canvas. */
+    --muted-foreground: 33 7% 62%;
+
+    --accent: 44 55% 54%;
+    --accent-foreground: 0 0% 4%;
+
+    --destructive: 0 41% 39%;
+    --destructive-foreground: 38 38% 93%;
+
+    --border: 0 0% 16%;
+    --input: 0 0% 16%;
+    --ring: 44 55% 54%;
+
+    --radius: 0.25rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  ::selection {
+    @apply bg-gold/30 text-cream;
+  }
+  /* Global keyboard-focus ring for all interactive elements (WCAG 2.4.7).
+     `:focus-visible` keeps it keyboard-only, so mouse clicks stay clean. */
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible,
+  [role="button"]:focus-visible {
+    @apply outline-none ring-2 ring-gold ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer utilities {
+  /* Thin, dark scrollbars that suit the dark canvas. */
+  .scrollbar-luxe {
+    scrollbar-width: thin;
+    scrollbar-color: #2a2a2a transparent;
+  }
+  .scrollbar-luxe::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+  .scrollbar-luxe::-webkit-scrollbar-thumb {
+    background: #2a2a2a;
+    border-radius: 9999px;
+  }
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Shimmer used by skeleton loaders. */
+  .shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(245, 240, 232, 0.06),
+      transparent
+    );
+    animation: shimmer 1.6s infinite;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}

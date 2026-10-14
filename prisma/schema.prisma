@@ -1,0 +1,1070 @@
+// ============================================================================
+//  Prisma schema — Niche Perfume Decants e-commerce
+// ----------------------------------------------------------------------------
+//  Conventions:
+//   - Primary keys are UUID strings (`@default(uuid())`), except `User`, whose
+//     PK is Clerk's `userId` so the DB row maps 1:1 to the Clerk identity.
+//   - Every model carries `createdAt` / `updatedAt` audit timestamps.
+//   - Money is stored as Decimal(10,2); `sizeML` as Decimal(5,1) (e.g. 2.0).
+//   - Soft-delete via `isActive` flags rather than hard deletes, so historical
+//     orders/reviews never lose their referenced products.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ----------------------------------------------------------------------------
+//  Enums
+// ----------------------------------------------------------------------------
+
+enum NotePosition {
+  TOP
+  HEART
+  BASE
+}
+
+enum Gender {
+  MASCULINE
+  FEMININE
+  UNISEX
+}
+
+enum Concentration {
+  EDP // Eau de Parfum
+  EDT // Eau de Toilette
+  PARFUM
+  EAU_DE_COLOGNE
+  EXTRAIT // Extrait de Parfum
+}
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  PENDING_COD // Ramburs — order placed, payment collected on delivery
+  PAID
+  PAID_COD // Ramburs — cash collected by courier, manually confirmed by admin
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+// How the customer pays for an order.
+enum PaymentMethod {
+  CARD
+  COD // Cash on Delivery / Ramburs
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+// ----------------------------------------------------------------------------
+//  Catalog
+// ----------------------------------------------------------------------------
+
+model PerfumeHouse {
+  id            String   @id @default(uuid())
+  name          String
+  slug          String   @unique
+  // Text/image fields are optional so a house can be created before its full
+  // editorial content and assets are ready.
+  description   String?  @db.Text
+  story         String?  @db.Text
+  // English translations (nullable — fall back to the base RO field when empty).
+  descriptionEn String?  @db.Text
+  storyEn       String?  @db.Text
+  countryEn     String?
+  logoUrl       String?
+  coverImageUrl String?
+  country       String
+  foundedYear   Int?
+  website       String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  perfumes Perfume[]
+
+  @@index([isActive])
+}
+
+model OlfactoryFamily {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?  @db.Text
+  colorHex    String   @default("#C8A951") // badge color in the UI
+  iconName    String? // lucide icon name for the family badge
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  perfumes Perfume[]
+}
+
+model OlfactoryNote {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?  @db.Text
+  // Broad accord this note belongs to, e.g. "citrus", "floral", "woody".
+  family      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  perfumes PerfumeNote[]
+
+  @@index([family])
+}
+
+// Explicit join table between Perfume and OlfactoryNote, carrying the position
+// of the note in the olfactory pyramid (top / heart / base).
+model PerfumeNote {
+  id        String       @id @default(uuid())
+  perfumeId String
+  noteId    String
+  position  NotePosition
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  perfume Perfume       @relation(fields: [perfumeId], references: [id], onDelete: Cascade)
+  note    OlfactoryNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  // A given note appears at most once per position on a perfume.
+  @@unique([perfumeId, noteId, position])
+  @@index([noteId])
+  @@index([perfumeId])
+}
+
+model Perfume {
+  id              String        @id @default(uuid())
+  name            String
+  slug            String        @unique
+  description     String        @db.Text
+  story           String?       @db.Text // the perfume's lore (optional)
+  // English translations (nullable — fall back to the base RO field when empty).
+  descriptionEn   String?       @db.Text
+  storyEn         String?       @db.Text
+  houseId         String
+  familyId        String
+  gender          Gender
+  launchYear      Int?
+  perfumer        String? // the nose who created it
+  concentration   Concentration
+  isActive        Boolean       @default(true)
+  isFeatured      Boolean       @default(false)
+  // Launch / waitlist / pre-order lifecycle (Phase 9 — Waitlist & Pre-orders).
+  isComingSoon    Boolean       @default(false)
+  launchDate      DateTime?
+  waitlistOpen    Boolean       @default(false)
+  preOrderOpen    Boolean       @default(false)
+  metaTitle       String?
+  metaDescription String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  house     PerfumeHouse    @relation(fields: [houseId], references: [id], onDelete: Restrict)
+  family    OlfactoryFamily @relation(fields: [familyId], references: [id], onDelete: Restrict)
+  notes     PerfumeNote[]
+  variants  DecantVariant[]
+  images    PerfumeImage[]
+  videos    ProductVideo[]
+  reviews   Review[]
+  wishlists WishlistItem[]
+  waitlist  WaitlistEntry[]
+
+  @@index([houseId])
+  @@index([familyId])
+  @@index([gender])
+  @@index([isActive, isFeatured])
+  @@index([houseId, isActive])
+  @@index([familyId, isActive])
+  @@index([isFeatured, isActive])
+  @@index([isComingSoon])
+}
+
+model PerfumeImage {
+  id        String   @id @default(uuid())
+  perfumeId String
+  url       String
+  altText   String?
+  position  Int      @default(0)
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  perfume Perfume @relation(fields: [perfumeId], references: [id], onDelete: Cascade)
+
+  @@index([perfumeId])
+}
+
+model DecantVariant {
+  id              String   @id @default(uuid())
+  perfumeId       String
+  sizeML          Decimal  @db.Decimal(5, 1) // 2.0, 5.0, 10.0, 30.0
+  price           Decimal  @db.Decimal(10, 2)
+  currency        String   @default("RON")
+  sku             String   @unique
+  isActive        Boolean  @default(true)
+  // Minimum order quantity when purchased through a wholesale account (Phase 9).
+  wholesaleMinQty Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  perfume           Perfume             @relation(fields: [perfumeId], references: [id], onDelete: Cascade)
+  inventory         Inventory?
+  cartItems         CartItem[]
+  orderItems        OrderItem[]
+  stockAlerts       StockNotification[]
+  flashSaleProducts FlashSaleProduct[]
+  bundleItems       BundleItem[]
+  preOrders         PreOrder[]
+
+  // One variant per size per perfume.
+  @@unique([perfumeId, sizeML])
+  @@index([perfumeId])
+  @@index([isActive])
+}
+
+model Inventory {
+  id                  String    @id @default(uuid())
+  variantId           String    @unique
+  quantity            Int       @default(0)
+  reservedQuantity    Int       @default(0)
+  lowStockThreshold   Int       @default(5)
+  // Set when a low-stock admin alert was last sent, so the daily digest cron
+  // doesn't re-alert the same variant within its cooldown window.
+  lowStockAlertSentAt DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  // availableQuantity (quantity - reservedQuantity) is computed in the app
+  // layer; not persisted to avoid drift.
+  variant DecantVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([quantity, reservedQuantity])
+}
+
+// ----------------------------------------------------------------------------
+//  Identity & user-owned collections
+// ----------------------------------------------------------------------------
+
+model User {
+  // PK is Clerk's userId — the DB row mirrors the Clerk identity 1:1.
+  id           String    @id
+  email        String    @unique
+  firstName    String?
+  lastName     String?
+  imageUrl     String?
+  role         UserRole  @default(CUSTOMER)
+  // Personal referral code, generated on `user.created` (e.g. "REF-X7K2Q9").
+  referralCode String?   @unique
+  // Set when a `user.deleted` Clerk webhook anonymizes the account; orders are
+  // preserved for accounting, so we never hard-delete the row.
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  cart              Cart?
+  orders            Order[]
+  reviews           Review[]
+  wishlist          WishlistItem[]
+  loyaltyAccount    LoyaltyAccount?
+  referrals         Referral[]
+  subscription      Subscription?
+  affiliation       AffiliateAccount?
+  pushSubscriptions PushSubscription[]
+  returns           ReturnRequest[]
+  wholesaleAccount  WholesaleAccount?
+  preOrders         PreOrder[]
+
+  @@index([role])
+}
+
+model Cart {
+  id                   String    @id @default(uuid())
+  userId               String    @unique
+  // Set when an abandoned-cart recovery email has been sent, so the cron job
+  // never emails the same idle cart twice.
+  abandonedEmailSentAt DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CartItem[]
+}
+
+model CartItem {
+  id            String    @id @default(uuid())
+  cartId        String
+  variantId     String
+  quantity      Int       @default(1)
+  // Set when this line was added as part of a bundle, so the cart UI can group
+  // bundle items under the bundle's name.
+  bundleId      String?
+  // 15-minute soft reservation window; expired reservations are reclaimed by
+  // the cart/checkout flows.
+  reservedUntil DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  cart    Cart          @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  variant DecantVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  bundle  Bundle?       @relation(fields: [bundleId], references: [id], onDelete: SetNull)
+
+  @@unique([cartId, variantId])
+  @@index([variantId])
+}
+
+// ----------------------------------------------------------------------------
+//  Orders
+// ----------------------------------------------------------------------------
+
+model Order {
+  id          String      @id @default(uuid())
+  // Human-friendly identifier shown to customers (e.g. "DN-7F3A21").
+  orderNumber String      @unique
+  userId      String
+  status      OrderStatus @default(PENDING)
+
+  stripePaymentIntentId String? @unique
+  stripeSessionId       String? @unique
+
+  subtotal     Decimal @db.Decimal(10, 2)
+  shippingCost Decimal @default(0) @db.Decimal(10, 2)
+  discount     Decimal @default(0) @db.Decimal(10, 2)
+  total        Decimal @db.Decimal(10, 2)
+  // Currency the customer was charged in, and the RON→currency rate snapshotted
+  // at checkout so historical totals never shift if the live rate changes.
+  currency     String  @default("RON")
+  exchangeRate Decimal @default(1) @db.Decimal(12, 6)
+
+  // Card (Stripe) vs. COD (Ramburs, cash collected on delivery).
+  paymentMethod PaymentMethod @default(CARD)
+
+  // Affiliate attribution captured from the visitor's `affiliate_code` cookie.
+  affiliateCode String?
+
+  // B2B wholesale order: priced via the account's discount rate, server-side
+  // only (Phase 9 — Wholesale Portal).
+  isWholesale        Boolean @default(false)
+  wholesaleAccountId String?
+
+  // Whether `Inventory.quantity` has been decremented for this order. COD orders
+  // above COD_AUTO_CONFIRM_THRESHOLD defer the deduction until an admin confirms,
+  // so this guards against double-deducting on that transition.
+  stockDeducted Boolean @default(false)
+
+  couponCodeId String?
+
+  // Gift card applied at checkout (redemption recorded in GiftCardRedemption).
+  giftCardId       String?
+  giftCardDiscount Decimal @default(0) @db.Decimal(10, 2)
+
+  // Premium gift wrapping add-on.
+  giftWrap        Boolean @default(false)
+  giftWrapMessage String? @db.Text
+
+  // { name, line1, line2?, city, county, postalCode, country, phone }
+  shippingAddress Json
+  notes           String? @db.Text
+
+  trackingNumber String?
+  trackingUrl    String?
+
+  paidAt      DateTime?
+  shippedAt   DateTime?
+  deliveredAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  coupon              CouponCode?          @relation(fields: [couponCodeId], references: [id], onDelete: SetNull)
+  wholesaleAccount    WholesaleAccount?    @relation("WholesaleOrders", fields: [wholesaleAccountId], references: [id], onDelete: SetNull)
+  items               OrderItem[]
+  giftCardRedemption  GiftCardRedemption?
+  affiliateConversion AffiliateConversion?
+  returns             ReturnRequest[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([affiliateCode])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([wholesaleAccountId])
+}
+
+model OrderItem {
+  id        String @id @default(uuid())
+  orderId   String
+  variantId String
+  quantity  Int
+
+  // Snapshot fields preserve historical accuracy even if the product later
+  // changes price, is renamed, or is deactivated.
+  priceAtPurchase       Decimal @db.Decimal(10, 2)
+  sizeMLAtPurchase      Decimal @db.Decimal(5, 1)
+  perfumeNameAtPurchase String
+  houseNameAtPurchase   String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant     DecantVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  returnItems ReturnItem[]
+
+  @@index([orderId])
+  @@index([variantId])
+}
+
+// ----------------------------------------------------------------------------
+//  Engagement
+// ----------------------------------------------------------------------------
+
+model Review {
+  id                 String   @id @default(uuid())
+  userId             String
+  perfumeId          String
+  rating             Int // 1..5, enforced in the validation layer
+  title              String
+  body               String   @db.Text
+  isVerifiedPurchase Boolean  @default(false)
+  isApproved         Boolean  @default(false)
+  helpfulCount       Int      @default(0)
+  // Optional Cloudinary video URL for a video review (Phase 9), max 60s.
+  videoUrl           String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  perfume Perfume       @relation(fields: [perfumeId], references: [id], onDelete: Cascade)
+  images  ReviewImage[]
+
+  // One review per user per perfume.
+  @@unique([userId, perfumeId])
+  @@index([perfumeId, isApproved])
+}
+
+model ReviewImage {
+  id        String   @id @default(cuid())
+  reviewId  String
+  url       String // Cloudinary URL
+  altText   String?
+  createdAt DateTime @default(now())
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+}
+
+model WishlistItem {
+  id        String   @id @default(uuid())
+  userId    String
+  perfumeId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  perfume Perfume @relation(fields: [perfumeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, perfumeId])
+  @@index([userId])
+}
+
+model CouponCode {
+  id             String     @id @default(uuid())
+  code           String     @unique
+  type           CouponType
+  value          Decimal    @db.Decimal(10, 2) // percentage (0-100) or fixed amount
+  minOrderAmount Decimal?   @db.Decimal(10, 2)
+  maxUsageCount  Int?
+  usageCount     Int        @default(0)
+  isActive       Boolean    @default(true)
+  expiresAt      DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  orders Order[]
+
+  @@index([isActive])
+}
+
+// ----------------------------------------------------------------------------
+//  Gift cards
+// ----------------------------------------------------------------------------
+
+model GiftCard {
+  id                String    @id @default(uuid())
+  // Cryptographically random, e.g. "GIFT-XKCD-1234".
+  code              String    @unique
+  initialValue      Decimal   @db.Decimal(10, 2)
+  remainingValue    Decimal   @db.Decimal(10, 2)
+  currency          String    @default("RON")
+  // The buyer (a logged-in user); null for guest/admin-issued cards.
+  purchasedByUserId String?
+  recipientEmail    String?
+  recipientName     String?
+  personalMessage   String?   @db.Text
+  // Activated only once the Stripe purchase succeeds (webhook).
+  isActive          Boolean   @default(false)
+  // Set when the activation/recipient email was sent (idempotency).
+  deliveredAt       DateTime?
+  expiresAt         DateTime?
+  // Stripe session that paid for this card.
+  stripeSessionId   String?   @unique
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  redemptions GiftCardRedemption[]
+
+  @@index([purchasedByUserId])
+  @@index([recipientEmail])
+}
+
+model GiftCardRedemption {
+  id         String   @id @default(uuid())
+  giftCardId String
+  orderId    String   @unique
+  amount     Decimal  @db.Decimal(10, 2)
+  redeemedAt DateTime @default(now())
+
+  giftCard GiftCard @relation(fields: [giftCardId], references: [id], onDelete: Cascade)
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([giftCardId])
+}
+
+model StockNotification {
+  id         String   @id @default(uuid())
+  email      String
+  variantId  String
+  isNotified Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  variant DecantVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  // A given email is queued at most once per variant.
+  @@unique([email, variantId])
+  @@index([variantId, isNotified])
+}
+
+// ----------------------------------------------------------------------------
+//  Loyalty & referrals (Phase 6)
+// ----------------------------------------------------------------------------
+
+enum LoyaltyTier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+enum LoyaltyEventType {
+  PURCHASE
+  REVIEW
+  REFERRAL_SEND
+  REFERRAL_RECEIVE
+  BIRTHDAY
+  REDEMPTION
+  EXPIRY
+  MANUAL_ADJUST
+}
+
+model LoyaltyAccount {
+  id             String               @id @default(cuid())
+  userId         String               @unique
+  points         Int                  @default(0)
+  lifetimePoints Int                  @default(0)
+  tier           LoyaltyTier          @default(BRONZE)
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions   LoyaltyTransaction[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+}
+
+model LoyaltyTransaction {
+  id          String           @id @default(cuid())
+  accountId   String
+  points      Int
+  type        LoyaltyEventType
+  description String
+  orderId     String?
+  reviewId    String?
+  referralId  String?
+  expiresAt   DateTime?
+  createdAt   DateTime         @default(now())
+  account     LoyaltyAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@index([expiresAt])
+  @@index([accountId, createdAt])
+}
+
+enum ReferralStatus {
+  PENDING
+  REGISTERED
+  COMPLETED
+}
+
+model Referral {
+  id              String         @id @default(cuid())
+  referrerId      String
+  referredEmail   String
+  referredUserId  String?
+  code            String         @unique
+  status          ReferralStatus @default(PENDING)
+  rewardGrantedAt DateTime?
+  createdAt       DateTime       @default(now())
+  referrer        User           @relation(fields: [referrerId], references: [id], onDelete: Cascade)
+
+  @@index([referrerId])
+  @@index([referredUserId])
+}
+
+// ----------------------------------------------------------------------------
+//  Flash sales (Phase 6)
+// ----------------------------------------------------------------------------
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+model FlashSale {
+  id            String             @id @default(cuid())
+  title         String
+  description   String?
+  discountType  DiscountType
+  discountValue Decimal            @db.Decimal(10, 2)
+  startsAt      DateTime
+  endsAt        DateTime
+  isActive      Boolean            @default(true)
+  bannerColor   String             @default("#C9A84C")
+  products      FlashSaleProduct[]
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([isActive, startsAt, endsAt])
+}
+
+model FlashSaleProduct {
+  id            String        @id @default(cuid())
+  flashSaleId   String
+  variantId     String
+  originalPrice Decimal       @db.Decimal(10, 2)
+  salePrice     Decimal       @db.Decimal(10, 2)
+  stockLimit    Int?
+  unitsSold     Int           @default(0)
+  flashSale     FlashSale     @relation(fields: [flashSaleId], references: [id], onDelete: Cascade)
+  variant       DecantVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([flashSaleId, variantId])
+  @@index([variantId])
+}
+
+// ----------------------------------------------------------------------------
+//  Subscription discovery box (Phase 6)
+// ----------------------------------------------------------------------------
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  PAUSED
+}
+
+enum BoxStatus {
+  PREPARING
+  CURATING
+  SHIPPED
+  DELIVERED
+}
+
+model SubscriptionPlan {
+  id            String         @id @default(cuid())
+  name          String
+  description   String
+  price         Decimal        @db.Decimal(10, 2)
+  currency      String         @default("RON")
+  stripePriceId String         @unique
+  decantCount   Int
+  sizeML        Decimal        @db.Decimal(5, 1)
+  features      String[]
+  isActive      Boolean        @default(true)
+  isFeatured    Boolean        @default(false)
+  subscriptions Subscription[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  planId               String
+  stripeSubscriptionId String             @unique
+  stripeCustomerId     String
+  status               SubscriptionStatus
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  cancelAtPeriodEnd    Boolean            @default(false)
+  preferences          Json?
+  boxes                SubscriptionBox[]
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                 SubscriptionPlan   @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([status])
+}
+
+model SubscriptionBox {
+  id             String       @id @default(cuid())
+  subscriptionId String
+  month          String
+  status         BoxStatus    @default(PREPARING)
+  trackingNumber String?
+  contents       Json?
+  shippedAt      DateTime?
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@unique([subscriptionId, month])
+  @@index([subscriptionId])
+}
+
+// ----------------------------------------------------------------------------
+//  Bundles / discovery sets (Phase 6)
+// ----------------------------------------------------------------------------
+
+model Bundle {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  description String       @db.Text
+  // English translation (nullable — falls back to the base RO description).
+  descriptionEn String?    @db.Text
+  price       Decimal      @db.Decimal(10, 2)
+  currency    String       @default("RON")
+  imageUrl    String?
+  isActive    Boolean      @default(true)
+  isFeatured  Boolean      @default(false)
+  items       BundleItem[]
+  cartItems   CartItem[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([isActive])
+}
+
+model BundleItem {
+  id        String        @id @default(cuid())
+  bundleId  String
+  variantId String
+  quantity  Int           @default(1)
+  bundle    Bundle        @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  variant   DecantVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([bundleId, variantId])
+  @@index([variantId])
+}
+
+// ----------------------------------------------------------------------------
+//  Affiliate / influencer program (Phase 7)
+// ----------------------------------------------------------------------------
+
+enum AffiliateStatus {
+  PENDING // application submitted, awaiting admin approval
+  ACTIVE
+  SUSPENDED
+}
+
+enum ConversionStatus {
+  PENDING // order placed via the affiliate link
+  CONFIRMED // order delivered and not cancelled
+  PAID // commission paid out
+  CANCELLED // order cancelled/refunded
+}
+
+model AffiliateAccount {
+  id              String          @id @default(cuid())
+  userId          String          @unique
+  code            String          @unique // e.g. "AFF-INFLUENCER" — personalised
+  commissionRate  Decimal         @default(0.10) @db.Decimal(5, 4) // 10%
+  status          AffiliateStatus @default(PENDING)
+  paypalEmail     String? // where payouts are sent
+  totalEarned     Decimal         @default(0) @db.Decimal(10, 2)
+  totalPaid       Decimal         @default(0) @db.Decimal(10, 2)
+  bio             String?         @db.Text // short about (for the public page)
+  instagramHandle String?
+  tiktokHandle    String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversions AffiliateConversion[]
+  payouts     AffiliatePayout[]
+
+  @@index([status])
+}
+
+model AffiliateConversion {
+  id          String           @id @default(cuid())
+  affiliateId String
+  orderId     String           @unique
+  orderTotal  Decimal          @db.Decimal(10, 2)
+  commission  Decimal          @db.Decimal(10, 2)
+  status      ConversionStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  affiliate AffiliateAccount @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  order     Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([affiliateId])
+  @@index([status])
+  @@index([affiliateId, status])
+}
+
+model AffiliatePayout {
+  id          String    @id @default(cuid())
+  affiliateId String
+  amount      Decimal   @db.Decimal(10, 2)
+  method      String    @default("PayPal")
+  reference   String?
+  paidAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  affiliate AffiliateAccount @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+
+  @@index([affiliateId])
+}
+
+// ----------------------------------------------------------------------------
+//  Email campaigns (Phase 7)
+// ----------------------------------------------------------------------------
+
+enum CampaignSegment {
+  ALL_CUSTOMERS // every user with at least one order
+  NEWSLETTER_SUBSCRIBERS // newsletter audience
+  LOYAL_CUSTOMERS // GOLD + PLATINUM tier
+  INACTIVE_90_DAYS // no order in the last 90 days
+  SUBSCRIPTION_ACTIVE // active discovery/connoisseur box
+  NEW_CUSTOMERS // first order within the last 30 days
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  CANCELLED
+}
+
+model EmailCampaign {
+  id          String          @id @default(cuid())
+  name        String
+  subject     String
+  preheader   String?
+  htmlContent String          @db.Text
+  segment     CampaignSegment
+  status      CampaignStatus  @default(DRAFT)
+  sentCount   Int             @default(0)
+  openRate    Decimal?        @db.Decimal(5, 2)
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  createdById String
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([status])
+}
+
+// ----------------------------------------------------------------------------
+//  Web push notifications (Phase 7)
+// ----------------------------------------------------------------------------
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ----------------------------------------------------------------------------
+//  Returns portal (Phase 8) — customer self-service returns (OG 34/2014, 14 zile)
+// ----------------------------------------------------------------------------
+
+enum ReturnStatus {
+  PENDING // cerere trimisă, nerevizuită
+  APPROVED // aprobat — client poate expedia
+  AWAITING_PARCEL // așteptăm coletul
+  RECEIVED // colet primit și verificat
+  REFUNDED // ramburs efectuat
+  REJECTED // cerere respinsă (cu motiv)
+}
+
+enum ReturnReason {
+  CHANGED_MIND
+  WRONG_ITEM
+  DAMAGED
+  NOT_AS_DESCRIBED
+  QUALITY_ISSUE
+  OTHER
+}
+
+model ReturnRequest {
+  id             String       @id @default(cuid())
+  orderId        String
+  userId         String
+  status         ReturnStatus @default(PENDING)
+  reason         ReturnReason
+  description    String?      @db.Text
+  refundAmount   Decimal?     @db.Decimal(10, 2)
+  refundMethod   String? // "card" | "voucher"
+  adminNotes     String?      @db.Text
+  trackingNumber String? // AWB retur de la client
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  resolvedAt     DateTime?
+
+  order Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items ReturnItem[]
+
+  @@index([orderId])
+  @@index([userId])
+  @@index([status, createdAt])
+}
+
+model ReturnItem {
+  id              String  @id @default(cuid())
+  returnRequestId String
+  orderItemId     String
+  quantity        Int
+  reason          String?
+
+  returnRequest ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  orderItem     OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+
+  @@index([returnRequestId])
+  @@index([orderItemId])
+}
+
+// ----------------------------------------------------------------------------
+//  Waitlist & Pre-orders (Phase 9)
+// ----------------------------------------------------------------------------
+
+model WaitlistEntry {
+  id         String    @id @default(cuid())
+  perfumeId  String
+  userId     String?
+  email      String
+  firstName  String?
+  notifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  perfume Perfume @relation(fields: [perfumeId], references: [id], onDelete: Cascade)
+
+  // One signup per email per perfume.
+  @@unique([perfumeId, email])
+  @@index([perfumeId])
+}
+
+enum PreOrderStatus {
+  PENDING // registered, not yet paid
+  PAID // paid, awaiting stock
+  FULFILLED // stock received, order shipped
+  CANCELLED
+}
+
+model PreOrder {
+  id              String         @id @default(cuid())
+  userId          String
+  variantId       String
+  quantity        Int            @default(1)
+  status          PreOrderStatus @default(PENDING)
+  stripeSessionId String?        @unique
+  expectedDate    DateTime?
+  fulfilledAt     DateTime?
+  createdAt       DateTime       @default(now())
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  variant DecantVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([variantId])
+  @@index([status])
+}
+
+// ----------------------------------------------------------------------------
+//  B2B Wholesale Portal (Phase 9)
+// ----------------------------------------------------------------------------
+
+enum WholesaleStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+model WholesaleAccount {
+  id           String          @id @default(cuid())
+  userId       String          @unique
+  companyName  String
+  cui          String?
+  website      String?
+  discountRate Decimal         @default(0.20) @db.Decimal(4, 3) // 0.200 = 20%
+  creditLimit  Decimal?        @db.Decimal(10, 2)
+  status       WholesaleStatus @default(PENDING)
+  approvedAt   DateTime?
+  notes        String?         @db.Text // admin notes / applicant message
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders Order[] @relation("WholesaleOrders")
+
+  @@index([status])
+}
+
+// ----------------------------------------------------------------------------
+//  Product video (Phase 9)
+// ----------------------------------------------------------------------------
+
+model ProductVideo {
+  id           String   @id @default(cuid())
+  perfumeId    String
+  url          String // Cloudinary video URL
+  thumbnailUrl String? // Cloudinary auto-generated poster
+  title        String?
+  duration     Int? // seconds
+  position     Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  perfume Perfume @relation(fields: [perfumeId], references: [id], onDelete: Cascade)
+
+  @@index([perfumeId])
+}
